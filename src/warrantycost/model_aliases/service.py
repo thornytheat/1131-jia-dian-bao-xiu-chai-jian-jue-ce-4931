@@ -3,7 +3,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from .contracts import CatalogVersion, RecordError, Rejection
-from .analysis import catalogue, mapped_model, coverage_by_part
+from .analysis import catalogue, mapped_model, coverage_by_part, effective_versions, variant, version_key
 
 
 @dataclass(frozen=True, slots=True)

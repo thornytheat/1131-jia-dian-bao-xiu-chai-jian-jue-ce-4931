@@ -7,10 +7,10 @@
 | 模块 | 使用者动作 | 入口 | 核心文件 | 测试 |
 |---|---|---|---|---|
 | M1 保修单 | 核保时点、筛出安全风险、把重复序列号送复核 | 运行证据第 1 段 | `src/warrantycost/warranty_claims/contracts.py` `src/warrantycost/warranty_claims/analysis.py` `src/warrantycost/warranty_claims/service.py` | `tests/test_warranty_claims.py` |
-| M2 机型映射 | 用生效版本解析兼容件，阻断重叠版本 | 运行证据第 2 段 | `src/warrantycost/model_aliases/contracts.py` `src/warrantycost/model_aliases/analysis.py` `src/warrantycost/model_aliases/service.py` | `tests/test_model_aliases.py` |
+| M2 机型映射 | 用生效版本解析兼容件，阻断重叠版本 | 运行证据第 2 段 | `src/warrantycost/model_aliases/contracts.py` `src/warrantycost/model_aliases/analysis.py` `src/warrantycost/model_aliases/service.py` | `tests/test_model_aliases.py` `tests/test_catalogue_collision.py` |
 | M3 返修样本 | 拆分可见、验证与不可使用的工单 | 运行证据第 3 段 | `src/warrantycost/repair_cohorts/contracts.py` `src/warrantycost/repair_cohorts/analysis.py` `src/warrantycost/repair_cohorts/service.py` | `tests/test_repair_cohorts.py` |
 | M4 成本拟合 | 按产品系列拟合成本和换件无效概率 | 运行证据第 4 段 | `src/warrantycost/claim_cost_model/contracts.py` `src/warrantycost/claim_cost_model/analysis.py` `src/warrantycost/claim_cost_model/service.py` | `tests/test_claim_cost_model.py` |
-| M5 配件授权 | 按拆检费、预期浪费和实际库存批准 | 运行证据第 5 段 | `src/warrantycost/parts_authorization/contracts.py` `src/warrantycost/parts_authorization/analysis.py` `src/warrantycost/parts_authorization/service.py` | `tests/test_parts_authorization.py` |
+| M5 配件授权 | 按拆检费、预期浪费和实际库存批准 | 运行证据第 5 段 | `src/warrantycost/parts_authorization/contracts.py` `src/warrantycost/parts_authorization/analysis.py` `src/warrantycost/parts_authorization/service.py` | `tests/test_parts_authorization.py` `tests/test_catalogue_collision.py` |
 | M6 维修结算 | 核对结算组成与不可重复消费的授权额度 | 运行证据第 6 段 | `src/warrantycost/service_balance/contracts.py` `src/warrantycost/service_balance/analysis.py` `src/warrantycost/service_balance/service.py` | `tests/test_service_balance.py` |
 
 ## 陷阱登记
@@ -18,6 +18,8 @@
 | TRAP | 输入情形 | 错误风险 | 处理 | 处理位置 | 测试 |
 |---|---|---|---|---|---|
 | TRAP-25 | 同一别名在两个生效版本重叠 | 机型取值受导入先后影响 | 冻结该别名并留下冲突 | `src/warrantycost/model_aliases/analysis.py` | `tests/test_model_aliases.py::test_catalogue_overlap_blocks_guessing` |
+| TRAP-54 | 同一报修机型有多个目录版本同时生效 | 挂起全部拖延维修，猜一版易发错件 | 逐版估算后按一致程度整单定处置，按内容排序 | `src/warrantycost/parts_authorization/analysis.py` | `tests/test_catalogue_collision.py::test_concurrent_versions_inspect_first_even_with_different_parts` |
+| TRAP-55 | 目录行在文件中的先后被当成本地判定顺序 | 调换目录行顺序改变授权和备件占用 | 版本按内容排序，比较不依赖行序 | `src/warrantycost/model_aliases/analysis.py` | `tests/test_catalogue_collision.py::test_catalogue_row_order_does_not_change_authorization_or_stock` |
 | TRAP-26 | 安全标记旧修订迟到 | 重新流入自动裁决 | 最高版本单据覆盖 | `src/warrantycost/warranty_claims/analysis.py` | `tests/test_warranty_claims.py::test_older_snapshot_cannot_undo_safety_flag` |
 | TRAP-31 | 拟合线上可能出现极端 logit | 指数溢出 | 对负绝对值求指数 | `src/warrantycost/claim_cost_model/analysis.py` | `tests/test_claim_cost_model.py::test_sigmoid_uses_stable_exponent` |
 | TRAP-32 | 同批次相同或近同平均值 | 归一时除零或浮点抵消 | 先中心化并设下限 | `src/warrantycost/claim_cost_model/analysis.py` | `tests/test_claim_cost_model.py::test_zero_variance_does_not_shift_cost_prediction` |

@@ -19,13 +19,39 @@ def catalogue(versions, day):
     return active, sorted(blocked,key=lambda row:(row["alias"],row["reason"]))
 
 
+def version_key(selected: CatalogVersion):
+    """Total, content-based ordering so catalogue row order never decides a conflict."""
+    return (selected.alias.casefold(), selected.master.casefold(), selected.family.casefold(),
+            selected.part.casefold(), selected.begin, selected.end, selected.service_minutes, selected.part_units)
+
+
+def effective_versions(versions, day):
+    """Every simultaneously effective version per alias, in a row-order independent sequence.
+
+    catalogue() freezes a contested alias for plain lookup so import order cannot pick a part.
+    This index keeps every live version so the authorization stage can assess them together
+    instead of either guessing one or suspending the whole repair.
+    """
+    groups = defaultdict(set)
+    for item in versions:
+        if item.begin >= item.end:
+            continue
+        if item.begin <= day < item.end:
+            groups[item.alias.casefold()].add(item)
+    return {key:tuple(sorted(entries,key=version_key)) for key,entries in sorted(groups.items())}
+
+
+def variant(alias: str, selected: CatalogVersion):
+    return {"alias":alias,"master":selected.master,"family":selected.family,"part":selected.part,
+            "service_minutes":selected.service_minutes,"part_units":selected.part_units}
+
+
 def mapped_model(alias: str, active):
     key = alias.casefold().strip()
     selected = active.get(key)
     if selected is None:
         return None
-    return {"alias":alias,"master":selected.master,"family":selected.family,"part":selected.part,
-            "service_minutes":selected.service_minutes,"part_units":selected.part_units}
+    return variant(alias, selected)
 
 
 def coverage_by_part(active):

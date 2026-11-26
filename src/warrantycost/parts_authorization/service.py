@@ -3,7 +3,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from .contracts import PartsRequest, RecordError, Rejection
-from .analysis import economic_choice, make_plan
+from .analysis import economic_choice, make_plan, make_versioned_plan, version_verdict
 
 
 @dataclass(frozen=True, slots=True)

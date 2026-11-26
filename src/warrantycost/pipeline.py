@@ -74,34 +74,51 @@ def run(capacity: int | None = None) -> dict:
     input_rows=intake.inspect(forms[0]); model_rows=mapping.inspect(catalogue[0]); samples=history.inspect(repair[0]); sales=payments.inspect(invoices[0])
     accepted,stale=intake.audit_claims(input_rows.records,rules["day"],rules["term_months"])
     active, catalogue_issues=mapping.catalogue(model_rows.records,rules["day"])
+    live=mapping.effective_versions(model_rows.records,rules["day"])
     closed_samples=history.sample_split(samples.records,rules["day"],holdout_days=rules["holdout_days"])
     fitted=training_sets(closed_samples)
-    request_docs=[]
     scores=[]
     decode=[]
+    assessments=[]
     for form in accepted:
-        variant=mapping.mapped_model(form.appliance,active)
-        if not variant or variant["family"] not in fitted:
+        cluster=live.get(form.appliance.casefold().strip())
+        if not cluster:
             stale.append(dict(claim=form.claim,state="机型或维修样本待核对",appliance=form.appliance))
             continue
-        estimator,validation,blocks,_,_=fitted[variant["family"]]
-        if not validation["support"]:
-            stale.append(dict(claim=form.claim,state="验证档期无样本",appliance=form.appliance))
-            continue
-        cost,p,distance=model.score(estimator,history.factors(form.age_month,variant["service_minutes"],form.symptom))
-        adjusted=max(0.0,cost+validation["residual_median"])
-        raw_risk=p
-        p=model.calibrated_risk(blocks,p)
-        scores.append(dict(原始风险=round(raw_risk,3),保修单=form.claim,历史组=variant["family"],自变量距离=round(distance,3),预测元=round(adjusted/100,2),原估计元=round(cost/100,2),返修风险=round(p,3)))
-        decode.append(dict(保修单=form.claim,**variant))
-        request_docs.append(dict(claim=form.claim,appliance=form.appliance,code=variant["master"],part=variant["part"],units=variant["part_units"],
-                              cost_cents=adjusted,risk=p,distance=distance,inspection_fee=form.inspection_fee))
-    candidates=stock.inspect(request_docs)
+        entries=[]
+        for position,selected in enumerate(cluster,start=1):
+            variant=mapping.variant(form.appliance,selected)
+            decode.append({"保修单":form.claim,"版本序号":position,**variant})
+            if variant["family"] not in fitted:
+                entries.append((position,None,"机型或维修样本待核对"))
+                continue
+            estimator,validation,blocks,_,_=fitted[variant["family"]]
+            if not validation["support"]:
+                entries.append((position,None,"验证档期无样本"))
+                continue
+            cost,p,distance=model.score(estimator,history.factors(form.age_month,variant["service_minutes"],form.symptom))
+            adjusted=max(0.0,cost+validation["residual_median"])
+            raw_risk=p
+            p=model.calibrated_risk(blocks,p)
+            scores.append(dict(原始风险=round(raw_risk,3),保修单=form.claim,版本序号=position,历史组=variant["family"],自变量距离=round(distance,3),预测元=round(adjusted/100,2),原估计元=round(cost/100,2),返修风险=round(p,3)))
+            try:
+                request=stock.PartsRequest.parse(dict(claim=form.claim,appliance=form.appliance,code=variant["master"],part=variant["part"],units=variant["part_units"],
+                                                      cost_cents=adjusted,risk=p,distance=distance,inspection_fee=form.inspection_fee))
+            except stock.RecordError:
+                entries.append((position,None,"估算无法入表"))
+                continue
+            entries.append((position,request,None))
+        assessments.append((form.claim,form.appliance,tuple(entries)))
     posted,pending_stock,warehouse_issues=stock.visible_postings(warehouse[0],decision_day=rules["day"])
     availability,quarantined,_,inventory_events=stock.warehouse_position(rules["part_stock"],posted)
-    decisions, reserved=stock.make_plan(candidates.records,availability,allowance,threshold=rules["probable_failure"],distance_limit=rules["radius"])
+    decisions,reserved,adjudication=stock.make_versioned_plan(assessments,availability,allowance,threshold=rules["probable_failure"],distance_limit=rules["radius"])
     stock_review=stock.spending_summary(rules["part_stock"],availability,reserved,quarantined,pending_stock)
     pending=[dict(claim=row["claim"],appliance=row.get("appliance","—"),code="—",part="—",parts_reserved=0,risk=None,cost_yuan=None,reason=row["state"]) for row in sorted(stale,key=lambda row:row["claim"])]
+    for item in adjudication:
+        if item["held"]:
+            pending.append(dict(claim=item["claim"],appliance=item["appliance"],code="—",part="—",parts_reserved=0,
+                                risk=None,cost_yuan=None,reason=item["verdict"]))
+    pending.sort(key=lambda row:(row["claim"],row["reason"]))
     statements=payments.reconcile(sales.records,decisions)
     reconciliation=payments.totals(statements)
     accrual=payments.aggregate_lines(decisions, sales.records, statements, {row.claim:row.seller for row in accepted})
@@ -119,9 +136,9 @@ def run(capacity: int | None = None) -> dict:
                        "risk":"无效更换概率","cost_yuan":"估算成本（元）","reason":"处置"},"rows":decisions+pending,
             "series":[dict(label=row["claim"],value=row["cost_yuan"]) for row in sorted(decisions,key=lambda item:item["claim"])],
             "stages":[section("保修单",f"受理 {len(accepted)} 件，隔离格式问题 {len(input_rows.rejected)} 件",[row.evidence() for row in accepted]+stale),
-                      section("机型映射",f"当日使用 {len(active)} 条有效别名",decode+catalogue_issues),
+                      section("机型映射",f"当日使用 {len(active)} 条有效别名，{sum(1 for rows in live.values() if len(rows)>1)} 个报修机型同时有多个生效版本",decode+catalogue_issues),
                       section("返修样本",f"训练 {len(closed_samples.training)}，回放 {len(closed_samples.holdout)}，隔离 {len(closed_samples.excluded)}",[dict(系列=family,成功率=value) for family,value in history.event_rates(closed_samples.training).items()]+history.risk_priors(closed_samples.training)+history.age_ranges(closed_samples.training,closed_samples.holdout)),
                       section("成本拟合",f"共对 {len(scores)} 单做盲估计",scores+fitted_review+threshold_evidence),
-                      section("配件授权",f"班次预留 {sum(reserved.values())} 件，额度 {allowance} 件",decisions+stock_review+inventory_events+warehouse_issues),
+                      section("配件授权",f"班次预留 {sum(reserved.values())} 件，额度 {allowance} 件",decisions+adjudication+stock_review+inventory_events+warehouse_issues),
                       section("维修结算",f"隔离 {reconciliation['exceptions']} 条对账差异",statements+[row.evidence() for row in accrual]+vendor_balances)],"audit_id":proof,
             "policy_replay":threshold_evidence,"vendor_balances":vendor_balances,"stock_review":stock_review}
